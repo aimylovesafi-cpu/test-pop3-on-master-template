@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>POOP DODGER PRO 💩</title>
+<style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    background:#87CEEB; font-family:Comic Sans MS, cursive;
+    touch-action:none; -webkit-user-select:none; user-select:none;
+  }
+  canvas { display:block; }
+
+  #ui {
+    position:fixed; top:15px; left:0; right:0; z-index:10;
+    color:#8B4513; font-size:18px; font-weight:bold;
+    text-shadow:2px 2px 0 #fff; text-align:center;
+    pointer-events:none;
+  }
+
+  #startScreen, #gameOver {
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    color:#8B4513; text-align:center; z-index:30;
+    background:rgba(255,255,255,0.95); padding:25px; border-radius:20px;
+    border:4px solid #8B4513; width:85%; max-width:350px;
+  }
+  #gameOver { display:none; }
+  #startScreen h1, #gameOver h1 { font-size:30px; margin-bottom:15px; }
+  #startScreen p { margin:8px 0; color:#555; line-height:1.4; font-size:15px; }
+  #startScreen button, #gameOver button {
+    margin-top:20px; padding:15px 0; width:100%; font-size:18px;
+    background:#FFD700; border:3px solid #8B4513; border-radius:15px;
+    cursor:pointer; font-weight:bold; color:#8B4513;
+  }
+
+  /* جوی استیک داینامیک - کوچیکتر */
+  #joystick {
+    position:fixed; width:100px; height:100px;
+    background:rgba(255,255,255,0.15); border:2px solid rgba(139,69,19,0.5);
+    border-radius:50%; z-index:20; display:none; pointer-events:none;
+  }
+  #stick {
+    position:absolute; top:50%; left:50%; width:40px; height:40px;
+    background:rgba(139,69,19,0.7); border:2px solid #8B4513;
+    border-radius:50%; transform:translate(-50%,-50%);
+  }
+
+  #fartBtn {
+    position:fixed; top:15px; right:15px; z-index:25;
+    background:#FFD700; border:3px solid #8B4513;
+    color:#8B4513; padding:10px 15px; border-radius:10px;
+    font-size:16px; font-weight:bold;
+  }
+</style>
+</head>
+<body>
+<div id="ui">💩 Dodged: <span id="score">0</span> | Lives: <span id="lives">3</span></div>
+
+<div id="startScreen">
+  <h1>💩 POOP DODGER PRO 💩</h1>
+  <p>Birds are pooping from the sky!</p>
+  <p><strong>Touch anywhere to move!</strong></p>
+  <p>Tap FART to scare birds away 😂</p>
+  <p>PC: Arrow keys + F key</p>
+  <button onclick="startGame()">START POOPING</button>
+</div>
+
+<div id="gameOver">
+  <h1>YOU GOT SH*T ON! 💩</h1>
+  <h2>Poops Dodged: <span id="finalScore">0</span></h2>
+  <p id="rankText">Rank: Baby Diaper</p>
+  <button onclick="restart()">WIPE & RETRY</button>
+</div>
+
+<button id="fartBtn" onclick="fart()">💨 FART</button>
+<div id="joystick"><div id="stick"></div></div>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+let player = { x: canvas.width/2, y: canvas.height-80, w: 50, h: 60, speed: 7, lives: 3 };
+let poops = [], birds = [], clouds = [], particles = [];
+let score = 0, gameRunning = false, gameStarted = false;
+let fartCooldown = 0, fartPower = 0;
+
+// Audio
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playSound(freq, duration, type='sine', vol=0.1) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.frequency.value = freq; osc.type = type;
+  gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+  osc.start(); osc.stop(audioCtx.currentTime + duration);
+}
+function playFart() {
+  playSound(80, 0.4, 'sawtooth', 0.3);
+  setTimeout(() => playSound(60, 0.3, 'sawtooth', 0.2), 100);
+}
+function playSplat() { playSound(200, 0.15, 'square', 0.2); }
+
+// Clouds
+for(let i=0; i<5; i++) {
+  clouds.push({
+    x: Math.random()*canvas.width,
+    y: Math.random()*canvas.height*0.4,
+    w: 60+Math.random()*40,
+    speed: 0.3+Math.random()*0.5
+  });
+}
+
+// Birds
+for(let i=0; i<3; i++) {
+  birds.push({
+    x: Math.random()*canvas.width,
+    y: 50+Math.random()*100,
+    speed: 1+Math.random()*2,
+    dir: Math.random() > 0.5? 1 : -1,
+    poopTimer: 60+Math.random()*120
+  });
+}
+
+// جوی استیک داینامیک - هرجا تاچ کنی
+let joyActive = false, joyStart = {x:0, y:0}, joyPos = {x:0, y:0};
+const joystick = document.getElementById('joystick');
+const stick = document.getElementById('stick');
+const JOY_RADIUS = 35; // شعاع حرکت استیک
+
+canvas.addEventListener('touchstart', e => {
+  if(!gameRunning) return;
+  const touch = e.touches[0];
+  joyActive = true;
+  joyStart = {x: touch.clientX, y: touch.clientY};
+
+  // جوی استیک رو زیر انگشت نشون بده
+  joystick.style.left = (joyStart.x - 50) + 'px';
+  joystick.style.top = (joyStart.y - 50) + 'px';
+  joystick.style.display = 'block';
+
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+});
+
+canvas.addEventListener('touchmove', e => {
+  if(!joyActive ||!gameRunning) return;
+  e.preventDefault();
+  const touch = e.touches[0];
+  let dx = touch.clientX - joyStart.x;
+  let dy = touch.clientY - joyStart.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+
+  // محدود کردن حرکت استیک
+  if(dist > JOY_RADIUS) {
+    const angle = Math.atan2(dy, dx);
+    dx = Math.cos(angle) * JOY_RADIUS;
+    dy = Math.sin(angle) * JOY_RADIUS;
+  }
+
+  joyPos = {x: dx, y: dy};
+  stick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+});
+
+canvas.addEventListener('touchend', () => {
+  joyActive = false;
+  joyPos = {x:0, y:0};
+  joystick.style.display = 'none';
+  stick.style.transform = 'translate(-50%,-50%)';
+});
+
+// Keyboard
+let keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if(e.key === 'f' || e.key === 'F') fart();
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+});
+window.addEventListener('keyup', e => keys[e.key] = false);
+
+function drawPlayer(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(0, 35, 25, 8, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = '#FFDBAC';
+  ctx.beginPath();
+  ctx.arc(0, 0, 20, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(-7, -5, 3, 0, Math.PI*2);
+  ctx.arc(7, -5, 3, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 5, 8, 0, Math.PI);
+  ctx.stroke();
+
+  ctx.fillStyle = '#FFDBAC';
+  ctx.fillRect(-25, -5, 10, 20);
+  ctx.fillRect(15, -5, 10, 20);
+  ctx.fillRect(-10, 20, 8, 15);
+  ctx.fillRect(2, 20, 8, 15);
+  ctx.restore();
+}
+
+function drawPoop(x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = '#8B4513';
+  ctx.strokeStyle = '#654321';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, -size*0.3, size*0.6, 0, Math.PI*2);
+  ctx.arc(-size*0.4, size*0.2, size*0.5, 0, Math.PI*2);
+  ctx.arc(size*0.4, size*0.2, size*0.5, 0, Math.PI*2);
+  ctx.arc(0, size*0.5, size*0.4, 0, Math.PI*2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawBird(x, y, dir) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(dir, 1);
+  ctx.fillStyle = '#555';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 15, 10, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(12, -5, 8, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#FFA500';
+  ctx.beginPath();
+  ctx.moveTo(18, -5);
+  ctx.lineTo(25, -3);
+  ctx.lineTo(18, -1);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(14, -7, 3, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(15, -7, 1.5, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function fart() {
+  if(fartCooldown > 0 ||!gameRunning) return;
+  fartCooldown = 180;
+  fartPower = 60;
+  playFart();
+  birds.forEach(b => { b.dir *= -1; b.speed += 2; });
+  poops.forEach(p => {
+    let dx = p.x - player.x;
+    let dy = p.y - player.y;
+    if(Math.sqrt(dx*dx + dy*dy) < 150) {
+      p.vx = dx * 0.1;
+      p.vy = dy * 0.1 - 5;
+    }
+  });
+}
+
+function spawnPoop(x, y) {
+  poops.push({
+    x: x, y: y,
+    vx: (Math.random()-0.5)*2,
+    vy: 2+Math.random()*2,
+    size: 8+Math.random()*6,
+    rotation: Math.random()*Math.PI*2,
+    rotSpeed: (Math.random()-0.5)*0.2
+  });
+}
+
+function spawnParticles(x,y,color,count=8) {
+  for(let i=0; i<count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random()-0.5)*6,
+      vy: (Math.random()-0.5)*6,
+      life: 30,
+      color
+    });
+  }
+}
+
+function update() {
+  if(!gameRunning) return;
+
+  if(fartCooldown > 0) fartCooldown--;
+  if(fartPower > 0) fartPower--;
+
+  // حرکت با جوی استیک داینامیک
+  if(joyActive) {
+    player.x += (joyPos.x / JOY_RADIUS) * player.speed;
+    // Y رو کمتر تاثیر میدیم چون بازی عمودی نیست
+    player.y += (joyPos.y / JOY_RADIUS) * player.speed * 0.3;
+  }
+
+  // کیبورد
+  if(keys['ArrowLeft'] && player.x > 25) player.x -= player.speed;
+  if(keys['ArrowRight'] && player.x < canvas.width-25) player.x += player.speed;
+
+  player.x = Math.max(25, Math.min(canvas.width-25, player.x));
+  player.y = Math.max(canvas.height-120, Math.min(canvas.height-40, player.y));
+
+  clouds.forEach(c => {
+    c.x += c.speed;
+    if(c.x > canvas.width + c.w) c.x = -c.w;
+  });
+
+  birds.forEach(b => {
+    b.x += b.speed * b.dir;
+    if(b.x > canvas.width + 30 || b.x < -30) b.dir *= -1;
+    b.poopTimer--;
+    if(b.poopTimer <= 0) {
+      spawnPoop(b.x, b.y + 10);
+      b.poopTimer = 80 + Math.random()*100;
+    }
+  });
+
+  poops.forEach((p,i) => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.3;
+    p.rotation += p.rotSpeed;
+    if(p.y > canvas.height + 50) {
+      poops.splice(i,1);
+      score++;
+    }
+    let dx = player.x - p.x, dy = player.y - p.y;
+    if(Math.sqrt(dx*dx + dy*dy) < 20 + p.size) {
+      poops.splice(i,1);
+      player.lives--;
+      spawnParticles(p.x, p.y, '#8B4513', 15);
+      playSplat();
+      if(player.lives <= 0) gameOver();
+    }
+  });
+
+  particles.forEach((p,i) => {
+    p.x += p.vx; p.y += p.vy; p.life--;
+    p.vy += 0.2;
+    if(p.life <= 0) particles.splice(i,1);
+  });
+
+  document.getElementById('score').textContent = score;
+  document.getElementById('lives').textContent = player.lives;
+}
+
+function draw() {
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, '#87CEEB');
+  gradient.addColorStop(1, '#98FB98');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  clouds.forEach(c => {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.w*0.3, 0, Math.PI*2);
+    ctx.arc(c.x+c.w*0.4, c.y, c.w*0.4, 0, Math.PI*2);
+    ctx.arc(c.x+c.w*0.8, c.y, c.w*0.3, 0, Math.PI*2);
+    ctx.fill();
+  });
+
+  birds.forEach(b => drawBird(b.x, b.y, b.dir));
+  poops.forEach(p => drawPoop(p.x, p.y, p.size));
+  if(gameStarted) drawPlayer(player.x, player.y);
+
+  if(fartPower > 0) {
+    ctx.fillStyle = `rgba(0,255,0,${fartPower/120})`;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y+30, fartPower*2, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life/30;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function startGame() {
+  document.getElementById('startScreen').style.display = 'none';
+  gameStarted = true;
+  gameRunning = true;
+}
+
+function gameOver() {
+  gameRunning = false;
+  document.getElementById('finalScore').textContent = score;
+  let rank = "Baby Diaper 👶";
+  if(score > 10) rank = "Toilet Trainee 🚽";
+  if(score > 25) rank = "Poop Ninja 🥷";
+  if(score > 50) rank = "Sewer Surfer 🏄";
+  if(score > 100) rank = "POOP GOD 💩👑";
+  document.getElementById('rankText').textContent = "Rank: " + rank;
+  document.getElementById('gameOver').style.display = 'block';
+}
+
+function restart() {
+  poops = []; particles = []; score = 0;
+  player.x = canvas.width/2; player.lives = 3;
+  gameRunning = true;
+  document.getElementById('gameOver').style.display = 'none';
+}
+
+function loop() {
+  update(); draw();
+  requestAnimationFrame(loop);
+}
+
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+
+let demoTime = 0;
+function demoLoop() {
+  if(gameStarted) return;
+  demoTime += 0.02;
+  draw();
+  drawPlayer(canvas.width/2 + Math.sin(demoTime)*50, canvas.height-80);
+  requestAnimationFrame(demoLoop);
+}
+
+demoLoop();
+loop();
+</script>
+</body>
+</html>
